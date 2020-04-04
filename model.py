@@ -1,10 +1,29 @@
 import numpy as np
+import pandas as pd
+
+
+def infectiousness(days_since_infection):
+    return 1 if days_since_infection is not None else 0
+
+
+def immunity(days_since_infection, days_of_immunity=100):
+    if days_since_infection is not None:
+        return 1 - (days_of_immunity - days_since_infection) / days_of_immunity
+    else:
+        return 0
+
+
+def emergence():
+    return True
+
+
+base_infectiousness = 0.05
+mortality = 0.05
 
 
 class Place:
     def __init__(self, name, capacity=10, desirability=1, fullness_aversion_factor=0.1, edges=[], agents=[]):
         self.name = name
-        self.__name__ = name
         self.capacity = capacity
         self.desirability = desirability
         self.edges = edges
@@ -12,10 +31,14 @@ class Place:
         self.fullness_aversion_factor = fullness_aversion_factor
 
     def fullness_aversion_score(self):
-        return 1 - self.fullness_aversion_factor * len(self.agents) / self.capacity
+        return max(1 - self.fullness_aversion_factor * len([a for a in self.agents if a.live]) / self.capacity, 0)
 
     def evolve(self):
-        return None
+        hazard = 1 - self.fullness_aversion_score()
+        for agent in self.agents:
+            for contra in self.agents:
+                if contra.live:
+                    agent.contact(contra, hazard=hazard)
 
 
 class World:
@@ -27,12 +50,12 @@ class World:
         if randomize:
             self._randomize()
 
-    def _randomize(self, n_places=10, n_agents=20):
+    def _randomize(self, n_places=10, n_agents=100):
 
         # Create several random places
         for i in range(n_places):
-            new_place = Place(name=i,
-                              capacity=np.random.randint(2, 10),
+            new_place = Place(name='P{}'.format(i),
+                              capacity=np.random.randint(2, 100),
                               desirability=np.random.rand(),
                               fullness_aversion_factor=np.random.rand())
             self.places.append(new_place)
@@ -55,8 +78,12 @@ class World:
 
         # Create several random agents
         for i in range(n_agents):
-            new_agent = Agent(name=i, p_move=np.random.rand())
+            new_agent = Agent(name='A{}'.format(i), p_move=np.random.rand())
             self.add_agent(new_agent)
+
+        self._force_emergence()
+
+        return True
 
     def _add_place(self, place):
         # Base function for adding places
@@ -82,6 +109,7 @@ class World:
                 if place.fullness_aversion_score() > 0:
                     destination = place
                     break
+                raise Exception('Could not assign agent {}'.format(agent.name))
 
         self._move_agent_to_place(agent=agent, destination=destination)
 
@@ -142,21 +170,50 @@ class World:
         for place in self.places:
             place.edges = self.graph[place]
 
-    def walk(self):
-
+    def evolve(self):
         # First, move everybody to their new places
         for agent in self.agents:
             self._move_agent_to_place(agent, agent.next_destination())
 
         # Second, evolve the properties of each place
-        for place in self.place:
+        for place in self.places:
             place.evolve()
 
+        # Finally, evolve disease states
+        for agent in self.agents:
+            agent.evolve()
+
+    def _force_emergence(self):
+        chosen_agent = np.random.choice(self.agents)
+        chosen_agent.infect()
+
     def census(self):
-        population = {}
+        population = pd.Series(name='population')
+        infected = pd.Series(name='infected')
+        immune = pd.Series(name='immune')
+        susceptible = pd.Series(name='susceptible')
+        cured = pd.Series(name='cured')
+
         for place in self.places:
-            population[place.name] = len(place.agents)
-        return population
+            l = str(place.name)
+            population[l] = len(
+                [a for a in place.agents if a.live])
+
+            infected[l] = len(
+                [a for a in place.agents if a.infected])
+
+            immune[l] = len(
+                [a for a in place.agents if a.immunity > 0])
+
+            susceptible[l] = population[l] - immune[l]
+            cured[l] = immune[l] - infected[l]
+
+        df = pd.concat(
+            [population.to_frame().T, infected.to_frame().T,
+             immune.to_frame().T, susceptible.to_frame().T, cured.to_frame().T]
+        )
+
+        return df
 
 
 class Agent:
@@ -165,8 +222,53 @@ class Agent:
         self.name = name
         self.p_move = p_move
 
+        # Infection properties
+        self.infected = False
+        self.live = True
+        self.days_since_infection = None
+        self.infectiousness = 0
+        self.immunity = 0       # Immunity post-infection
+        self.resistance = 0.5   # Base immunity pre-infection
+
+    def contact(self, contra, hazard=1):
+        # First, evaluate how likely this agent is to become infected
+        if self.live and contra.live:
+            infectiousness_score = contra.infectiousness * hazard * base_infectiousness
+            resistance_score = self.resistance * self.immunity
+            if infectiousness_score > resistance_score:
+                self.infect()
+
+        return self.infected
+
     def evolve(self):
+        # Get the infection state of the agent
+
+        if self.infected and (np.random.rand() < mortality):
+            self.live = False
+            self.infected = False
+            self.immunity = 0
+            self.infectiousness = 0
+            self.p_move = 0
+
+        if self.live:
+            if self.infected:
+                self.infectiousness = infectiousness(self.days_since_infection)
+                self.days_since_infection += 1
+
+            self.immunity = immunity(self.days_since_infection)
+
+            # Agent becomes cured
+            if self.infected and (self.immunity > 0.1):
+                self.cure()
+
         return None
+
+    def cure(self):
+        self.infected = False
+
+    def infect(self):
+        self.infected = True
+        self.days_since_infection = 0
 
     def next_destination(self):
         destination = self.place
@@ -185,8 +287,3 @@ class Agent:
                 if place_scores[place] > place_scores[destination]:
                     destination = place
         return destination
-
-
-class Model:
-    def __init__(self, world):
-        model.world = world
