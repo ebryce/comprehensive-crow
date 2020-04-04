@@ -18,7 +18,7 @@ def emergence():
 
 
 base_infectiousness = 0.05
-mortality = 0.05
+mortality = 0.01
 
 
 class Place:
