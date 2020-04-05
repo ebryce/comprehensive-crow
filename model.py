@@ -33,6 +33,9 @@ class Place:
     def fullness_aversion_score(self):
         return max(1 - self.fullness_aversion_factor * len([a for a in self.agents if a.live]) / self.capacity, 0)
 
+    def has_capacity(self):
+        return self.capacity > len([a for a in self.agents if a.live])
+
     def evolve(self):
         hazard = 1 - self.fullness_aversion_score()
         for agent in self.agents:
@@ -50,15 +53,22 @@ class World:
         if randomize:
             self._randomize()
 
-    def _randomize(self, n_places=10, n_agents=100):
+    def _randomize(self, n_places=100, n_agents=1000):
 
         # Create several random places
         for i in range(n_places):
             new_place = Place(name='P{}'.format(i),
-                              capacity=np.random.randint(2, 100),
+                              capacity=np.random.randint(
+                                  (n_agents / n_places) * 0.2, (n_agents / n_places) * 2),
                               desirability=np.random.rand(),
                               fullness_aversion_factor=np.random.rand())
             self.places.append(new_place)
+
+        # Confirm the world has capacity for all of the agents we are creating
+        while(np.sum([p.capacity for p in self.places]) < n_agents):
+            # Choose a random place and bolster its capacity
+            chosen_place = np.random.choice(self.places)
+            chosen_place.capacity += 1
 
         # Create a randomly connected graph of places
         for place in self.places:
@@ -105,10 +115,13 @@ class World:
 
         if destination == None:
             # Randomly assign the agent to a place
+            placed = False
             for place in np.random.permutation(self.places):
-                if place.fullness_aversion_score() > 0:
+                if place.has_capacity():
                     destination = place
+                    placed = True
                     break
+            if not placed:
                 raise Exception('Could not assign agent {}'.format(agent.name))
 
         self._move_agent_to_place(agent=agent, destination=destination)
